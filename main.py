@@ -42,10 +42,13 @@ dynamic_model.enable_wind=True  # Set this to True to add a moment from the wind
 i2c = busio.I2C(board.SCL, board.SDA)
 imu = adafruit_bno055.BNO055_I2C(i2c)
 rotation = pulseio.PulseIn(board.D5, maxlen = 10, idle_state = False)
-forward = pulseio.PulseIn(board.D6, maxlen = 10, idle_state = False)
+forward = pulseio.PulseIn(board.D12, maxlen = 10, idle_state = False)
+liftIn = pulseio.PulseIn(board.D6, maxlen = 10, idle_state = False)
 left = pwmio.PWMOut(board.D9, frequency = 40, duty_cycle = 3931.5)
 right = pwmio.PWMOut(board.D10, frequency = 40, duty_cycle = 3931.5)
 led = pwmio.PWMOut(board.D13, frequency = 5, duty_cycle = 0)
+liftOut = pwmio.PWMOut(board.D11, frequency=40, duty_cycle = 3931.5)
+
 
 # When adding integration capability
 # You will need a variable to accumulate the integral term, etc. 
