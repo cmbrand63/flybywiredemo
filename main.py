@@ -8,6 +8,8 @@ from digitalio import Direction
 import pwmio
 import pulseio
 import time
+import serial
+import board
 
 # Configuration of the simulator (will have to remove these lines
 # when running on real hardware) 
@@ -19,13 +21,13 @@ dynamic_model.enable_vertical_motion=True #Set this to True to add vertical cont
 # (adafruit_bno055.py, busio.py, board.py, etc.) confused with similarly
 # named files used for actual CircuitPython hardware. Do NOT copy the
 # simulator versions onto your Feather microcontroller! 
-import board
 
 # Define and initalize pins
 
 i2c = busio.I2C(board.SCL, board.SDA)
 imu = adafruit_bno055.BNO055_I2C(i2c)
-
+board.lvez1_uart="pyserial"
+rangefinder=serial.Serial("/dev/ttyS0",baudrate=9600)
 rotation = pulseio.PulseIn(board.D5, maxlen = 10, idle_state = False)
 forward = pulseio.PulseIn(board.D12, maxlen = 10, idle_state = False)
 liftIn = pulseio.PulseIn(board.D6, maxlen = 10, idle_state = False)
@@ -35,18 +37,21 @@ led = pwmio.PWMOut(board.D13, frequency = 5, duty_cycle = 0)
 liftOut = pwmio.PWMOut(board.D11, frequency=40, duty_cycle = 3931.5)
 
 #Define and initialize PWM terms
-integral = 0.0
-previous_time = time.monotonic()        # Keep track of time for integral term
+alt_integral = 0.0
+rot_integral = 0.0
+previous_time1 = time.monotonic()        # Keep track of time for integral term
+previous_time2 = time.monotonic()        # Keep track of time for integral term
+previous_vertical_velocity = 0.0
 
 rot_pro = 0.01     
 rot_der = 0.1
 rot_int = 0.01
 
-alt_pro = 0
-alt_der = 0
-alt_int = 0
+alt_pro = 0.1
+alt_der = 0.05
+alt_int = 0.01
 
-hover_ms = 1.647
+hover_ms = 1.5
 # Control Loop:
 while True:
     #Rotation Control Loop:
@@ -71,15 +76,15 @@ while True:
             herror = ((hcommand - heading + 360 - 180) % 360 - 180) # Difference between commanded orientation and current orientation from sensor
         
             current_time = time.monotonic()
-            dt = current_time - previous_time
-            previous_time = current_time
-            integral += rot_int * herror * dt
-            integral = max(-0.1, min(0.1, integral))
+            dt1 = current_time - previous_time1
+            previous_time1 = current_time
+            rot_integral += rot_int * herror * dt1
+            rot_integral = max(-0.1, min(0.1, rot_integral))
                 
 
             
     
-            hout = rot_pro * herror + rot_der * zrot + integral
+            hout = rot_pro * herror + rot_der * zrot + rot_integral
             hout = max(-0.5, min(0.5, hout)) # Bound commanded output rotation: cannot exceed 0.5 or be less than -0.5
             left.duty_cycle=(hout+1.5)*2621 # Set new duty cycle based on PID loop 
             right.duty_cycle=(hout-1.5)*-2621
@@ -89,13 +94,37 @@ while True:
 
     # Altitude Control Loop
     if len(liftIn) > 0:
+        range_data = rangefinder.read_until(expected=b'\r')
+        if range_data[0:1] == b'R':
+            altitude_inches = int(range_data[1:4])
+            print("Rangefinder altitude:", altitude_inches, "in")
         liftValue = liftIn.popleft()
-        if (liftValue <= 2000):
-                altitude = dynamic_model.dynamic_instance.pos[2]
-                vertical_velocity = dynamic_model.dynamic_instance.vel[2]
+        #print (liftValue)
+        if (1000 <= liftValue <= 2000):
+                with dynamic_model.dynamic_instance.model_lock:
+                    altitude = dynamic_model.dynamic_instance.pos[2]
+                    vertical_velocity = dynamic_model.dynamic_instance.vel[2]
+
                 desired_vertical_velocity = (liftValue - 1500) * 0.002
+
                 speed_error = desired_vertical_velocity - vertical_velocity
-                lift_command = hover_ms + alt_pro * speed_error + alt_int
+
+                current_time = time.monotonic()
+                dt2 = current_time - previous_time2
+                previous_time2 = current_time
+                alt_integral = alt_int * speed_error * dt2
+                alt_integral = max(-0.1, min(0.1, alt_integral))
+
+                vertical_acceleration = (vertical_velocity - previous_vertical_velocity) / dt2
+
+                previous_vertical_velocity = vertical_velocity
+
+                alt_derivtive = alt_der * vertical_acceleration
+
+                lift_command = hover_ms + alt_pro * speed_error + alt_derivtive + alt_integral
+                liftOut.duty_cycle = int(lift_command * 1e-3 * liftOut.frequency * 65536)
+
+                print("P:", alt_pro * speed_error,"I:", alt_integral,"D:", alt_derivtive,"Lift:", lift_command)
                 
         
 
