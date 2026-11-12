@@ -14,7 +14,7 @@ import board
 # Configuration of the simulator (will have to remove these lines
 # when running on real hardware) 
 import dynamic_model
-dynamic_model.enable_wind=True  # Set this to True to add a moment from the wind
+dynamic_model.enable_wind=False  # Set this to True to add a moment from the wind
 dynamic_model.enable_vertical_motion=True #Set this to True to add vertical control system capability to simulation
 
 # ***NOTE*** Do not get the various files which are part of the simulator
@@ -31,10 +31,10 @@ rangefinder=serial.Serial("/dev/ttyS0",baudrate=9600)
 rotation = pulseio.PulseIn(board.D5, maxlen = 10, idle_state = False)
 forward = pulseio.PulseIn(board.D12, maxlen = 10, idle_state = False)
 liftIn = pulseio.PulseIn(board.D6, maxlen = 10, idle_state = False)
-left = pwmio.PWMOut(board.D9, frequency = 40, duty_cycle = 3931.5)
-right = pwmio.PWMOut(board.D10, frequency = 40, duty_cycle = 3931.5)
+left = pwmio.PWMOut(board.D9, frequency = 40, duty_cycle = 3932.1)
+right = pwmio.PWMOut(board.D10, frequency = 40, duty_cycle = 3932.1)
 led = pwmio.PWMOut(board.D13, frequency = 5, duty_cycle = 0)
-liftOut = pwmio.PWMOut(board.D11, frequency=40, duty_cycle = 3931.5)
+liftOut = pwmio.PWMOut(board.D11, frequency=40, duty_cycle = 3932.1)
 
 #Define and initialize PWM terms
 alt_integral = 0.0
@@ -42,12 +42,13 @@ rot_integral = 0.0
 previous_time1 = time.monotonic()        # Keep track of time for integral term
 previous_time2 = time.monotonic()        # Keep track of time for integral term
 previous_vertical_velocity = 0.0
+previous_rot_velocity = 0.0
 
-rot_pro = 0.01     
-rot_der = 0.1
-rot_int = 0.01
+rot_pro = 0.15
+rot_der = 0.001
+rot_int = 0.2
 
-alt_pro = 0.1
+alt_pro = 0.15
 alt_der = 0.05
 alt_int = 0.01
 
@@ -57,7 +58,7 @@ while True:
     #Rotation Control Loop:
     if len(rotation) > 0:
         rvalue = rotation.popleft()
-        if rvalue < 2500:               
+        if 1000 <= rvalue <= 2000:               
             cal = imu.calibrated        
             if cal == True:
                 led.duty_cycle = 65535
@@ -71,23 +72,28 @@ while True:
             yrot = imu.gyro[1]
             zrot = imu.gyro[2]
     
-            hcommand = .36 * (rvalue - 1000) - 180      # Commanded orientation based on from your rotation pulse input      
+            desired_rot_velocity = (rvalue - 1500) * 0.001    # Commanded orientation based on from your rotation pulse input      
     
-            herror = ((hcommand - heading + 360 - 180) % 360 - 180) # Difference between commanded orientation and current orientation from sensor
+            rot_velocity_error = desired_rot_velocity - zrot # Difference between commanded orientation and current orientation from sensor
         
             current_time = time.monotonic()
             dt1 = current_time - previous_time1
             previous_time1 = current_time
-            rot_integral += rot_int * herror * dt1
-            rot_integral = max(-0.1, min(0.1, rot_integral))
+            if dt1 > 0:
+                rot_integral += rot_int * rot_velocity_error * dt1
+                rot_integral = max(-0.1, min(0.1, rot_integral))
                 
+                angular_acceleration = (zrot - previous_rot_velocity) / dt1
+                print("Rotational Velocity Error: ", rot_velocity_error)
+                previous_rot_velocity = zrot
 
+                rot_derivative = -rot_der * angular_acceleration
             
     
-            hout = rot_pro * herror + rot_der * zrot + rot_integral
-            hout = max(-0.5, min(0.5, hout)) # Bound commanded output rotation: cannot exceed 0.5 or be less than -0.5
-            left.duty_cycle=(hout+1.5)*2621 # Set new duty cycle based on PID loop 
-            right.duty_cycle=(hout-1.5)*-2621
+                hout = rot_pro * rot_velocity_error + rot_integral + rot_derivative
+                hout = max(-0.5, min(0.5, hout)) # Bound commanded output rotation: cannot exceed 0.5 or be less than -0.5
+                left.duty_cycle= int((hout-1.5)*-2621) # Set new duty cycle based on PID loop 
+                right.duty_cycle= int((hout+1.5)*2621)
 
 
     pass # Done with loop
@@ -97,7 +103,7 @@ while True:
         range_data = rangefinder.read_until(expected=b'\r')
         if range_data[0:1] == b'R':
             altitude_inches = int(range_data[1:4])
-            print("Rangefinder altitude:", altitude_inches, "in")
+            #print("Rangefinder altitude:", altitude_inches, "in")
         liftValue = liftIn.popleft()
         #print (liftValue)
         if (1000 <= liftValue <= 2000):
@@ -112,7 +118,7 @@ while True:
                 current_time = time.monotonic()
                 dt2 = current_time - previous_time2
                 previous_time2 = current_time
-                alt_integral = alt_int * speed_error * dt2
+                alt_integral += alt_int * speed_error * dt2
                 alt_integral = max(-0.1, min(0.1, alt_integral))
 
                 vertical_acceleration = (vertical_velocity - previous_vertical_velocity) / dt2
@@ -124,7 +130,7 @@ while True:
                 lift_command = hover_ms + alt_pro * speed_error + alt_derivtive + alt_integral
                 liftOut.duty_cycle = int(lift_command * 1e-3 * liftOut.frequency * 65536)
 
-                print("P:", alt_pro * speed_error,"I:", alt_integral,"D:", alt_derivtive,"Lift:", lift_command)
+                #print("P:", alt_pro * speed_error,"I:", alt_integral,"D:", alt_derivtive,"Lift:", lift_command)
                 
         
 
